@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "multimedia-converter",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "identifier": "com.raul.multimedia-converter",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -32,6 +32,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "createUpdaterArtifacts": true,
     "resources": [
       "binaries/ffmpeg.exe",
       "binaries/ffprobe.exe"
@@ -43,5 +44,13 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDU0RDM1NTc3NzMzRjM4NzIKUldSeU9EOXpkMVhUVk1pWHZTZUN6bHdYSXdmWlVVQ3NoaStrQmtNV0duZHJvOExXeGloN3F6dlMK",
+      "endpoints": [
+        "https://github.com/Bobe1destructor/multimedia-converter/releases/latest/download/latest.json"
+      ]
+    }
   }
 }

@@ -209,6 +209,8 @@ pub fn run() {
         })
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         // Caché de la detección de GPU: se calcula una sola vez por sesión
         .manage(commands::HwCache::default())
         // Conversiones en curso (para poder cancelarlas)

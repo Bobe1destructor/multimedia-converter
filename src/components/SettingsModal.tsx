@@ -25,12 +25,12 @@ import {
   type ThreadMode,
 } from "../hooks/useAppSettings";
 import { playCompletionChime } from "../lib/utils";
+import { CURRENT_VERSION } from "../lib/updater";
 import {
-  CURRENT_VERSION,
-  checkForAppUpdates,
-  openDownloadLink,
-  type UpdateInfo,
-} from "../lib/updater";
+  checkForNativeUpdate,
+  installNativeUpdate,
+  type UpdateStatus,
+} from "../lib/nativeUpdater";
 
 interface ThumbCacheInfo {
   count: number;
@@ -138,19 +138,34 @@ export function SettingsModal({
 
   // Estado del comprobador de actualizaciones
   const [checkingUpdate, setCheckingUpdate] = useState(false);
-  const [updateResult, setUpdateResult] = useState<{ checked: boolean; update: UpdateInfo | null }>({
-    checked: false,
-    update: null,
-  });
+  const [nativeStatus, setNativeStatus] = useState<UpdateStatus | null>(null);
+  const [manualChecked, setManualChecked] = useState(false);
+  const [installingNative, setInstallingNative] = useState(false);
+  const [installProgress, setInstallProgress] = useState<number | null>(null);
 
   const handleManualCheckUpdate = async () => {
     setCheckingUpdate(true);
-    setUpdateResult({ checked: false, update: null });
+    setManualChecked(false);
+    setNativeStatus(null);
     try {
-      const info = await checkForAppUpdates();
-      setUpdateResult({ checked: true, update: info });
+      const status = await checkForNativeUpdate();
+      setNativeStatus(status);
+      setManualChecked(true);
     } finally {
       setCheckingUpdate(false);
+    }
+  };
+
+  const handleTriggerNativeInstall = async () => {
+    if (!nativeStatus?.rawUpdate || installingNative) return;
+    setInstallingNative(true);
+    try {
+      await installNativeUpdate(nativeStatus.rawUpdate, (pct) => {
+        setInstallProgress(pct);
+      });
+    } catch {
+      setInstallingNative(false);
+      setInstallProgress(null);
     }
   };
 
@@ -749,22 +764,51 @@ export function SettingsModal({
               </div>
 
               {/* Resultado de búsqueda manual */}
-              {updateResult.checked && (
+              {manualChecked && (
                 <div className="mt-3">
-                  {updateResult.update ? (
-                    <div className="flex items-center justify-between gap-2 rounded-xl border border-indigo-500/30 bg-indigo-950/40 p-3">
-                      <div>
-                        <p className="text-xs font-bold text-white">
-                          ¡Nueva versión v{updateResult.update.version} disponible!
-                        </p>
+                  {nativeStatus?.available ? (
+                    <div className="flex flex-col gap-2 rounded-xl border border-indigo-500/30 bg-indigo-950/40 p-3">
+                      <div className="flex items-center justify-between gap-2">
+                        <div>
+                          <p className="text-xs font-bold text-white">
+                            ¡Nueva versión v{nativeStatus.version} disponible!
+                          </p>
+                          <p className="text-[11px] text-slate-300">
+                            {installingNative
+                              ? installProgress !== null && installProgress < 100
+                                ? `Descargando parche… (${installProgress}%)`
+                                : "Reiniciando…"
+                              : "Se instalará y reiniciará automáticamente."}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          disabled={installingNative}
+                          onClick={handleTriggerNativeInstall}
+                          className="inline-flex items-center gap-1.5 rounded-xl bg-indigo-600 px-3 py-1.5 text-xs font-bold text-white transition-colors hover:bg-indigo-500 disabled:opacity-50"
+                        >
+                          {installingNative ? (
+                            <>
+                              <RefreshCw size={13} className="animate-spin" />
+                              <span>{installProgress !== null ? `${installProgress}%` : "Instalando…"}</span>
+                            </>
+                          ) : (
+                            <>
+                              <Download size={13} />
+                              <span>Actualizar y reiniciar</span>
+                            </>
+                          )}
+                        </button>
                       </div>
-                      <button
-                        type="button"
-                        onClick={() => openDownloadLink(updateResult.update!.downloadUrl)}
-                        className="inline-flex items-center gap-1.5 rounded-xl bg-indigo-600 px-3 py-1.5 text-xs font-bold text-white transition-colors hover:bg-indigo-500"
-                      >
-                        <Download size={13} /> Descargar
-                      </button>
+
+                      {installingNative && installProgress !== null && (
+                        <div className="mt-1 overflow-hidden rounded-full bg-slate-800 p-0.5">
+                          <div
+                            className="h-1.5 rounded-full bg-gradient-to-r from-indigo-500 to-cyan-400 transition-all duration-300"
+                            style={{ width: `${installProgress}%` }}
+                          />
+                        </div>
+                      )}
                     </div>
                   ) : (
                     <div className="rounded-xl border border-emerald-500/20 bg-emerald-950/20 px-3 py-2 text-xs text-emerald-300">

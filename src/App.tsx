@@ -19,8 +19,8 @@ const SettingsModal = lazy(() => import("./components/SettingsModal").then((m) =
 import { ToastContainer, type ToastItem } from "./components/Toast";
 import { playErrorSound, splitPath } from "./lib/utils";
 import type { IncompatibleHandler } from "./types";
-import { checkForAppUpdates, type UpdateInfo } from "./lib/updater";
-import { UpdateBanner } from "./components/UpdateBanner";
+import { checkForNativeUpdate, type UpdateStatus } from "./lib/nativeUpdater";
+import { NativeUpdateBanner } from "./components/NativeUpdateBanner";
 
 type TabId = "video" | "image" | "doc";
 
@@ -33,14 +33,14 @@ const TABS = [
 export default function App() {
   const [tab, setTab] = useState<TabId>("video");
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [availableUpdate, setAvailableUpdate] = useState<UpdateInfo | null>(null);
+  const [nativeUpdate, setNativeUpdate] = useState<UpdateStatus | null>(null);
 
-  // Buscar actualizaciones al abrir la app de forma silenciosa
+  // Buscar actualizaciones nativas al abrir la app
   useEffect(() => {
     let cancelled = false;
-    checkForAppUpdates().then((update) => {
-      if (!cancelled && update) {
-        setAvailableUpdate(update);
+    checkForNativeUpdate().then((status) => {
+      if (!cancelled && status.available) {
+        setNativeUpdate(status);
       }
     });
     return () => {
@@ -166,11 +166,11 @@ export default function App() {
           </div>
         </header>
 
-        {/* Banner de actualización de versión si hay una disponible en GitHub */}
-        {availableUpdate && (
-          <UpdateBanner
-            update={availableUpdate}
-            onDismiss={() => setAvailableUpdate(null)}
+        {/* Banner de actualización nativa automática (descarga y reinicia) */}
+        {nativeUpdate && (
+          <NativeUpdateBanner
+            status={nativeUpdate}
+            onDismiss={() => setNativeUpdate(null)}
           />
         )}
 

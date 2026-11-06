@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { AnimatePresence, motion } from "framer-motion";
-import { BookOpen, FolderOpen, HelpCircle, Image as ImageIcon, Plus, ShieldCheck, UploadCloud, X } from "lucide-react";
+import { BookOpen, Eye, FolderOpen, HelpCircle, Image as ImageIcon, Plus, ShieldCheck, UploadCloud, X } from "lucide-react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import type { ImageConverter, ImageMode, ImageQueueItem } from "../hooks/useImageConverter";
@@ -10,6 +10,7 @@ import type { ImageMetadata, ImgFormat, ImgScale } from "../types";
 import { splitPath } from "../lib/utils";
 import { detectAspect } from "../lib/resolution";
 import { Card, DropZone, GradientButton, Notice, ProgressBar, Segmented, SecondaryButton, Stat } from "./ui";
+import { PreviewModal, type PreviewTarget } from "./PreviewModal";
 
 const FORMATS = ["png", "jpg", "webp"] as const;
 const FORMAT_LABEL: Record<ImgFormat, string> = {
@@ -119,6 +120,7 @@ function ImageQueueRowInternal({
   locked,
   onSelect,
   onRemove,
+  onPreview,
 }: {
   it: ImageQueueItem;
   isSelected: boolean;
@@ -126,6 +128,7 @@ function ImageQueueRowInternal({
   locked: boolean;
   onSelect: (id: string) => void;
   onRemove: (id: string) => void;
+  onPreview: (it: ImageQueueItem) => void;
 }) {
   const f = splitPath(it.path);
   const realDiff =
@@ -155,7 +158,19 @@ function ImageQueueRowInternal({
           : "border-transparent bg-[#23284f]/40 hover:bg-[#23284f]/70"
       }`}
     >
-      <ImageThumb path={it.path} />
+      <div
+        onClick={(e) => {
+          e.stopPropagation();
+          onPreview(it);
+        }}
+        className="group relative cursor-pointer"
+        title="Ver vista previa / Comparar"
+      >
+        <ImageThumb path={it.path} />
+        <div className="absolute inset-0 flex items-center justify-center rounded-lg bg-black/50 opacity-0 transition-opacity group-hover:opacity-100">
+          <Eye size={14} className="text-white" />
+        </div>
+      </div>
       <div className="min-w-0 flex-1">
         <p className="truncate text-sm font-medium text-slate-200" title={it.path}>
           {f.file}
@@ -170,6 +185,18 @@ function ImageQueueRowInternal({
           </p>
         )}
       </div>
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          onPreview(it);
+        }}
+        className="rounded-md p-1.5 text-slate-400 transition-colors hover:bg-slate-700/40 hover:text-indigo-300"
+        aria-label="Vista previa"
+        title="Vista previa"
+      >
+        <Eye size={14} />
+      </button>
       {resItem?.ok && (
         <button
           type="button"
@@ -744,6 +771,19 @@ export function ImageTab({ ic }: { ic: ImageConverter }) {
 
   // Estado local del glosario de imágenes ("mode" | "format" | null)
   const [glossary, setGlossary] = useState<ImageGlossaryTab | null>(null);
+  const [previewTarget, setPreviewTarget] = useState<PreviewTarget | null>(null);
+
+  const handleOpenPreview = useCallback((it: ImageQueueItem) => {
+    const res = resultsMap?.get(it.path);
+    setPreviewTarget({
+      type: "image",
+      title: splitPath(it.path).file,
+      originalPath: it.path,
+      outputPath: res?.ok ? res.dest : null,
+      originalSize: it.meta?.sizeBytes ?? undefined,
+      outputSize: res?.sizeBytes ?? undefined,
+    });
+  }, [resultsMap]);
 
   // Cerrar el glosario con la tecla Esc
   useEffect(() => {
@@ -887,6 +927,7 @@ export function ImageTab({ ic }: { ic: ImageConverter }) {
                       locked={running}
                       onSelect={handleSelect}
                       onRemove={handleRemove}
+                      onPreview={handleOpenPreview}
                     />
                   ))}
                   {false && ([] as any[]).map((it: any) => {
@@ -1216,6 +1257,14 @@ export function ImageTab({ ic }: { ic: ImageConverter }) {
         mode={ic.mode}
         format={ic.format}
       />
+
+      {/* Modal interactivo de Vista Previa y Comparación */}
+      {previewTarget && (
+        <PreviewModal
+          target={previewTarget}
+          onClose={() => setPreviewTarget(null)}
+        />
+      )}
     </div>
   );
 }

@@ -1,7 +1,7 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
 
 export const GITHUB_REPO = "Bobe1destructor/multimedia-converter";
-export const CURRENT_VERSION = "0.3.3";
+export const CURRENT_VERSION = "0.3.4";
 
 export interface UpdateInfo {
   version: string;

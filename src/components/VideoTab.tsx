@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { AnimatePresence, motion } from "framer-motion";
-import { BookOpen, ChevronDown, Film, FolderOpen, HelpCircle, Plus, Scissors, Square, UploadCloud, X } from "lucide-react";
+import { BookOpen, ChevronDown, Eye, Film, FolderOpen, HelpCircle, Plus, Scissors, Square, UploadCloud, X } from "lucide-react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import type { HwState } from "../hooks/useHwProfile";
@@ -24,6 +24,7 @@ import { formatTime, parseTimeInput, splitPath } from "../lib/utils";
 import { detectAspect, resolutionOptions, resolveTarget } from "../lib/resolution";
 import { VIDEO_PRESETS } from "../lib/presets";
 import { Card, DropZone, GradientButton, Notice, ProgressBar, Segmented, SecondaryButton, Stat } from "./ui";
+import { PreviewModal, type PreviewTarget } from "./PreviewModal";
 
 /* ───────────────────────── Helpers ───────────────────────── */
 
@@ -637,13 +638,14 @@ function VideoThumbInternal({ thumb }: { thumb: string | null | undefined }) {
 const VideoThumb = memo(VideoThumbInternal);
 
 function QueueRowInternal({
-  it, selected, locked, onSelect, onRemove,
+  it, selected, locked, onSelect, onRemove, onPreview,
 }: {
   it: QueueItem;
   selected: boolean;
   locked: boolean;
   onSelect: (id: string) => void;
   onRemove: (id: string) => void;
+  onPreview: (it: QueueItem) => void;
 }) {
   const v = it.meta?.video ?? null;
   const sub =
@@ -676,7 +678,19 @@ function QueueRowInternal({
       }`}
     >
       <div className="flex items-center gap-3">
-        <VideoThumb thumb={it.meta?.thumbnail} />
+        <div
+          onClick={(e) => {
+            e.stopPropagation();
+            onPreview(it);
+          }}
+          className="group relative cursor-pointer"
+          title="Ver vista previa"
+        >
+          <VideoThumb thumb={it.meta?.thumbnail} />
+          <div className="absolute inset-0 flex items-center justify-center rounded-lg bg-black/50 opacity-0 transition-opacity group-hover:opacity-100">
+            <Eye size={14} className="text-white" />
+          </div>
+        </div>
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-medium text-slate-100" title={it.path}>
             {splitPath(it.path).file}
@@ -696,6 +710,18 @@ function QueueRowInternal({
           )}
         </div>
         <StatusChip it={it} />
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onPreview(it);
+          }}
+          className="rounded-md p-1.5 text-slate-400 transition-colors hover:bg-slate-700/40 hover:text-indigo-300"
+          aria-label="Vista previa"
+          title="Vista previa"
+        >
+          <Eye size={15} />
+        </button>
         {it.status === "done" && it.output && (
           <button
             type="button"
@@ -933,6 +959,18 @@ export function VideoTab({ vc, hw }: { vc: VideoConverter; hw: HwState }) {
 
   const [presetsOpen, setPresetsOpen] = useState(false);
   const [glossary, setGlossary] = useState<GlossaryTab | null>(null);
+  const [previewTarget, setPreviewTarget] = useState<PreviewTarget | null>(null);
+
+  const handleOpenPreview = useCallback((it: QueueItem) => {
+    setPreviewTarget({
+      type: "video",
+      title: splitPath(it.path).file,
+      originalPath: it.path,
+      outputPath: it.output ?? null,
+      originalSize: it.meta?.sizeBytes ?? undefined,
+      outputSize: it.outputBytes ?? undefined,
+    });
+  }, []);
 
   useEffect(() => {
     if (!glossary) return;
@@ -1101,6 +1139,7 @@ export function VideoTab({ vc, hw }: { vc: VideoConverter; hw: HwState }) {
                         locked={running}
                         onSelect={handleSelect}
                         onRemove={handleRemove}
+                        onPreview={handleOpenPreview}
                       />
                     ))}
                   </AnimatePresence>
@@ -1600,6 +1639,14 @@ export function VideoTab({ vc, hw }: { vc: VideoConverter; hw: HwState }) {
         format={vc.format}
         codec={vc.codec}
       />
+
+      {/* Modal interactivo de Vista Previa y Comparación */}
+      {previewTarget && (
+        <PreviewModal
+          target={previewTarget}
+          onClose={() => setPreviewTarget(null)}
+        />
+      )}
     </div>
   );
 }
