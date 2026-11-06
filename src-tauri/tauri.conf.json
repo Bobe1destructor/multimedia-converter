@@ -32,7 +32,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "createUpdaterArtifacts": true,
+    "createUpdaterArtifacts": "v1Compatible",
     "resources": [
       "binaries/ffmpeg.exe",
       "binaries/ffprobe.exe"
