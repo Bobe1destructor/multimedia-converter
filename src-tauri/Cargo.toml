@@ -1,0 +1,36 @@
+[package]
+name = "multimedia-converter"
+version = "0.3.3"
+description = "Convertidor multimedia"
+authors = ["you"]
+edition = "2021"
+
+[lib]
+name = "multimedia_converter_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["protocol-asset"] }
+tauri-plugin-opener = "2"
+tauri-plugin-dialog = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"
+tokio = { version = "1", features = ["process", "io-util", "sync", "time", "rt", "rt-multi-thread", "macros", "fs"] }
+rayon = "1"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
+webp = "0.3"
+zip = { version = "2.2", default-features = false, features = ["deflate"] }
+flate2 = "1"
+lopdf = "0.34"
+pdf-extract = "0.7"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
