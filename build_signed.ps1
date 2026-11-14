@@ -1,4 +1,4 @@
-$ErrorActionPreference = "Stop"
+﻿$ErrorActionPreference = "Stop"
 
 $keyPath = "$HOME\.tauri\multimedia-converter.key"
 
@@ -15,6 +15,6 @@ $env:TAURI_SIGNING_PRIVATE_KEY = $privateKey
 npx tauri build
 
 Write-Host "Generando latest.json para el actualizador nativo..." -ForegroundColor Cyan
-powershell -ExecutionPolicy Bypass -File ./generate_latest_json.ps1 -Version "0.3.5" -Notes "Actualizaciones nativas y nuevas mejoras"
+powershell -ExecutionPolicy Bypass -File ./generate_latest_json.ps1 -Version "0.3.6" -Notes "Actualizaciones nativas y nuevas mejoras"
 
 
