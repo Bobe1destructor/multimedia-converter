@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
+import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
 import { AnimatePresence, motion } from "framer-motion";
 import {
@@ -7,6 +8,7 @@ import {
   Cpu,
   Download,
   FileSignature,
+  FileText,
   Files,
   FolderOpen,
   History,
@@ -105,7 +107,7 @@ function hslToRgb(h: number, s: number, l: number): [number, number, number] {
   else if (h < 180) [r, g, b] = [0, c, x];
   else if (h < 240) [r, g, b] = [0, x, c];
   else if (h < 300) [r, g, b] = [x, 0, c];
-  else [r, g, b] = [c, 0, x];
+  else[r, g, b] = [c, 0, x];
 
   return [Math.round((r + m) * 255), Math.round((g + m) * 255), Math.round((b + m) * 255)];
 }
@@ -135,6 +137,8 @@ export function SettingsModal({
   const [cacheInfo, setCacheInfo] = useState<ThumbCacheInfo | null>(null);
   const [clearingCache, setClearingCache] = useState(false);
   const [showCustomRgb, setShowCustomRgb] = useState(false);
+  const [appVersion, setAppVersion] = useState<string>(CURRENT_VERSION);
+  const [logsError, setLogsError] = useState<string | null>(null);
 
   // Estado del comprobador de actualizaciones
   const [checkingUpdate, setCheckingUpdate] = useState(false);
@@ -142,6 +146,27 @@ export function SettingsModal({
   const [manualChecked, setManualChecked] = useState(false);
   const [installingNative, setInstallingNative] = useState(false);
   const [installProgress, setInstallProgress] = useState<number | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    getVersion()
+      .then((v) => {
+        if (active && v) setAppVersion(v);
+      })
+      .catch(() => { });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const handleOpenLogs = async () => {
+    setLogsError(null);
+    try {
+      await invoke("open_logs_dir");
+    } catch (e) {
+      setLogsError(typeof e === "string" ? e : "No se pudo abrir la carpeta de logs.");
+    }
+  };
 
   const handleManualCheckUpdate = async () => {
     setCheckingUpdate(true);
@@ -296,11 +321,10 @@ export function SettingsModal({
                       key={p.id}
                       type="button"
                       onClick={() => settings.setAccentHex(p.hex)}
-                      className={`inline-flex items-center gap-2 rounded-xl border px-3 py-1.5 text-xs font-semibold transition-colors ${
-                        active
+                      className={`inline-flex items-center gap-2 rounded-xl border px-3 py-1.5 text-xs font-semibold transition-colors ${active
                           ? "border-indigo-500 bg-indigo-600/20 text-white"
                           : "border-[#23284f] bg-[#0e1122] text-slate-300 hover:border-slate-600"
-                      }`}
+                        }`}
                     >
                       <span className="h-3.5 w-3.5 rounded-full shadow-sm" style={{ backgroundColor: p.hex }} />
                       {p.name}
@@ -481,9 +505,8 @@ export function SettingsModal({
                   role="switch"
                   aria-checked={settings.rememberLastSettings}
                   onClick={() => settings.setRememberLastSettings(!settings.rememberLastSettings)}
-                  className={`flex h-6 w-11 shrink-0 items-center rounded-full p-0.5 transition-colors ${
-                    settings.rememberLastSettings ? "justify-end bg-indigo-500" : "justify-start bg-slate-600/60"
-                  }`}
+                  className={`flex h-6 w-11 shrink-0 items-center rounded-full p-0.5 transition-colors ${settings.rememberLastSettings ? "justify-end bg-indigo-500" : "justify-start bg-slate-600/60"
+                    }`}
                 >
                   <motion.span
                     layout
@@ -493,8 +516,8 @@ export function SettingsModal({
                 </button>
               </div>
 
-              {settings.rememberLastSettings && (
-                settings.lastVideo || settings.lastImage || settings.lastDoc ? (
+              {settings.rememberLastSettings &&
+                (settings.lastVideo || settings.lastImage || settings.lastDoc ? (
                   <div className="mt-3 space-y-1.5 rounded-xl border border-[#23284f] bg-[#0e1122]/80 px-3 py-2 text-[11px] text-slate-400">
                     {settings.lastVideo && (
                       <p>
@@ -524,8 +547,7 @@ export function SettingsModal({
                       </p>
                     )}
                   </div>
-                ) : null
-              )}
+                ) : null)}
             </section>
 
             {/* 4. Sufijo de archivos generados */}
@@ -609,9 +631,8 @@ export function SettingsModal({
                       key={a.id}
                       type="button"
                       onClick={() => settings.setOnCompleteAction(a.id)}
-                      className={`rounded-lg py-1.5 text-xs font-semibold transition-colors ${
-                        active ? "bg-indigo-600 text-white shadow" : "text-slate-400 hover:text-slate-200"
-                      }`}
+                      className={`rounded-lg py-1.5 text-xs font-semibold transition-colors ${active ? "bg-indigo-600 text-white shadow" : "text-slate-400 hover:text-slate-200"
+                        }`}
                     >
                       {a.label}
                     </button>
@@ -629,9 +650,8 @@ export function SettingsModal({
                   role="switch"
                   aria-checked={settings.notifyOnComplete}
                   onClick={() => settings.setNotifyOnComplete(!settings.notifyOnComplete)}
-                  className={`flex h-6 w-11 shrink-0 items-center rounded-full p-0.5 transition-colors ${
-                    settings.notifyOnComplete ? "justify-end bg-indigo-500" : "justify-start bg-slate-600/60"
-                  }`}
+                  className={`flex h-6 w-11 shrink-0 items-center rounded-full p-0.5 transition-colors ${settings.notifyOnComplete ? "justify-end bg-indigo-500" : "justify-start bg-slate-600/60"
+                    }`}
                 >
                   <motion.span
                     layout
@@ -652,22 +672,20 @@ export function SettingsModal({
                 <button
                   type="button"
                   onClick={() => settings.setOverwriteExisting(false)}
-                  className={`rounded-xl border px-3 py-2 text-left transition-colors ${
-                    !settings.overwriteExisting
+                  className={`rounded-xl border px-3 py-2 text-left transition-colors ${!settings.overwriteExisting
                       ? "border-indigo-500 bg-indigo-600/15 text-white"
                       : "border-[#23284f] bg-[#0e1122] text-slate-400 hover:text-slate-200"
-                  }`}
+                    }`}
                 >
                   <p className="text-xs font-bold">Numerar (_2, _3…)</p>
                 </button>
                 <button
                   type="button"
                   onClick={() => settings.setOverwriteExisting(true)}
-                  className={`rounded-xl border px-3 py-2 text-left transition-colors ${
-                    settings.overwriteExisting
+                  className={`rounded-xl border px-3 py-2 text-left transition-colors ${settings.overwriteExisting
                       ? "border-indigo-500 bg-indigo-600/15 text-white"
                       : "border-[#23284f] bg-[#0e1122] text-slate-400 hover:text-slate-200"
-                  }`}
+                    }`}
                 >
                   <p className="text-xs font-bold">Sobrescribir</p>
                 </button>
@@ -689,11 +707,10 @@ export function SettingsModal({
                       key={t.id}
                       type="button"
                       onClick={() => settings.setThreadMode(t.id)}
-                      className={`rounded-xl border px-2.5 py-2 text-left transition-colors ${
-                        active
+                      className={`rounded-xl border px-2.5 py-2 text-left transition-colors ${active
                           ? "border-indigo-500 bg-indigo-600/15 text-white"
                           : "border-[#23284f] bg-[#0e1122] text-slate-400 hover:text-slate-200"
-                      }`}
+                        }`}
                     >
                       <p className="text-xs font-bold">{t.label}</p>
                       <p className="mt-0.5 text-[10px] leading-tight text-slate-400">{t.hint}</p>
@@ -740,7 +757,32 @@ export function SettingsModal({
               </div>
             </section>
 
-            {/* 9. Actualizaciones */}
+            {/* 9. Diagnóstico y registros (Logs) */}
+            <section className="rounded-2xl border border-[#23284f] bg-[#131a2a]/80 p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <div className="flex items-center gap-2 text-sm font-bold text-white">
+                    <FileText size={16} className="text-indigo-400" />
+                    <span>Diagnóstico y registros</span>
+                  </div>
+                  <p className="mt-1 text-xs text-slate-400">
+                    Guarda errores de FFmpeg, fallbacks de GPU y eventos de Office COM.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleOpenLogs}
+                  className="inline-flex shrink-0 items-center gap-1.5 rounded-xl border border-[#23284f] bg-[#0e1122] px-3 py-2 text-xs font-semibold text-slate-200 transition-colors hover:border-indigo-500/40 hover:bg-indigo-500/10 hover:text-white"
+                >
+                  <FolderOpen size={14} /> Abrir logs
+                </button>
+              </div>
+              {logsError && (
+                <p className="mt-2 text-xs text-rose-400">{logsError}</p>
+              )}
+            </section>
+
+            {/* 10. Actualizaciones */}
             <section className="rounded-2xl border border-[#23284f] bg-[#131a2a]/80 p-4">
               <div className="flex items-center justify-between gap-3">
                 <div>
@@ -749,7 +791,7 @@ export function SettingsModal({
                     <span>Actualizaciones</span>
                   </div>
                   <p className="mt-1 text-xs text-slate-400">
-                    Versión instalada: <span className="font-semibold text-slate-200">v{CURRENT_VERSION}</span>
+                    Versión instalada: <span className="font-semibold text-slate-200">v{appVersion}</span>
                   </p>
                 </div>
                 <button
@@ -812,7 +854,7 @@ export function SettingsModal({
                     </div>
                   ) : (
                     <div className="rounded-xl border border-emerald-500/20 bg-emerald-950/20 px-3 py-2 text-xs text-emerald-300">
-                      ✓ Ya tienes instalada la versión más reciente (v{CURRENT_VERSION}).
+                      ✓ Ya tienes instalada la versión más reciente (v{appVersion}).
                     </div>
                   )}
                 </div>

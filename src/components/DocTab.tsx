@@ -7,10 +7,13 @@ import {
   ArrowUp,
   BookOpen,
   Combine,
+  FileArchive,
   FileText,
   FolderOpen,
   HelpCircle,
+  Image as ImageIcon,
   Plus,
+  Scissors,
   ShieldCheck,
   UploadCloud,
   X,
@@ -18,24 +21,43 @@ import {
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import type { DocConverter, DocMode, DocQueueItem } from "../hooks/useDocConverter";
 import { useTauriDrop } from "../hooks/tauri";
-import type { DocFormat } from "../types";
+import type { DocFormat, PdfCompressLevel, SplitMode } from "../types";
 import { splitPath } from "../lib/utils";
 import { Card, DropZone, GradientButton, Notice, ProgressBar, Segmented, SecondaryButton, Stat } from "./ui";
 
-const DOC_FORMATS: readonly DocFormat[] = ["pdf", "docx", "txt", "md"] as const;
+const DOC_FORMATS: readonly DocFormat[] = ["pdf", "docx", "xlsx", "txt", "md"] as const;
 const DOC_FORMAT_LABEL: Record<DocFormat, string> = {
   pdf: "PDF",
   docx: "DOCX (Word)",
+  xlsx: "XLSX (Excel)",
   txt: "TXT (Texto)",
   md: "Markdown (.md)",
 };
 
-const MODES: readonly DocMode[] = ["convert", "strip", "merge"] as const;
+const MODES: readonly DocMode[] = ["convert", "strip", "merge", "split", "img2pdf", "compress"] as const;
 const MODE_LABEL: Record<DocMode, string> = {
-  convert: "Convertir formato",
+  convert: "Convertir",
   strip: "Quitar metadatos",
   merge: "Unir PDFs",
+  split: "Dividir PDF",
+  img2pdf: "Imágenes a PDF",
+  compress: "Comprimir PDF",
 };
+
+const SPLIT_MODES: readonly SplitMode[] = ["extract", "burst"] as const;
+const SPLIT_MODE_LABEL: Record<SplitMode, string> = {
+  extract: "Extraer rango en 1 PDF",
+  burst: "Separar cada página",
+};
+
+const COMPRESS_LEVELS: readonly PdfCompressLevel[] = ["low", "medium", "high"] as const;
+const COMPRESS_LEVEL_LABEL: Record<PdfCompressLevel, string> = {
+  low: "Ligera (Alta calidad)",
+  medium: "Equilibrada",
+  high: "Fuerte (Menor peso)",
+};
+
+const IMG_EXTS = ["jpg", "jpeg", "png", "webp"];
 
 function formatBytes(n: number | null | undefined) {
   if (n === null || n === undefined) return "—";
@@ -43,6 +65,11 @@ function formatBytes(n: number | null | undefined) {
   if (n >= 1024 ** 2) return `${(n / 1024 ** 2).toFixed(2)} MB`;
   if (n >= 1024) return `${(n / 1024).toFixed(1)} KB`;
   return `${n} B`;
+}
+
+function isPlainTextExt(ext: string): boolean {
+  const clean = ext.toLowerCase();
+  return clean === "txt" || clean === "md" || clean === "markdown";
 }
 
 function Step({ n, children }: { n: number; children: React.ReactNode }) {
@@ -90,7 +117,7 @@ function Row({ label, from, to }: { label: string; from: string; to: string }) {
   );
 }
 
-/** Insignia visual por extensión de documento (PDF en rojo, DOCX en azul, MD en púrpura, TXT en esmeralda). */
+/** Insignia visual por extensión de archivo. */
 function DocBadgeInternal({ ext }: { ext: string }) {
   const clean = ext.toUpperCase();
   const cls =
@@ -98,9 +125,13 @@ function DocBadgeInternal({ ext }: { ext: string }) {
       ? "border-rose-500/40 bg-rose-500/15 text-rose-300"
       : clean === "DOCX"
         ? "border-sky-500/40 bg-sky-500/15 text-sky-300"
-        : clean === "MD"
-          ? "border-purple-500/40 bg-purple-500/15 text-purple-300"
-          : "border-emerald-500/40 bg-emerald-500/15 text-emerald-300";
+        : clean === "XLSX"
+          ? "border-emerald-500/40 bg-emerald-500/15 text-emerald-300"
+          : clean === "MD"
+            ? "border-purple-500/40 bg-purple-500/15 text-purple-300"
+            : IMG_EXTS.includes(ext.toLowerCase())
+              ? "border-amber-500/40 bg-amber-500/15 text-amber-300"
+              : "border-teal-500/40 bg-teal-500/15 text-teal-300";
 
   return (
     <div className={`flex h-10 w-12 shrink-0 items-center justify-center rounded-lg border text-[11px] font-extrabold tracking-tight ${cls}`}>
@@ -109,8 +140,6 @@ function DocBadgeInternal({ ext }: { ext: string }) {
   );
 }
 
-
-
 const DocBadge = memo(DocBadgeInternal);
 
 function DocQueueRowInternal({
@@ -118,8 +147,9 @@ function DocQueueRowInternal({
   index,
   total,
   isSelected,
-  merge,
+  reorderable,
   mode,
+  effectiveFormat,
   running,
   resItem,
   onSelect,
@@ -131,8 +161,9 @@ function DocQueueRowInternal({
   index: number;
   total: number;
   isSelected: boolean;
-  merge: boolean;
+  reorderable: boolean;
   mode: DocMode;
+  effectiveFormat: DocFormat;
   running: boolean;
   resItem?: { ok: boolean; dest: string; sizeBytes?: number | null };
   onSelect: (id: string) => void;
@@ -141,7 +172,14 @@ function DocQueueRowInternal({
   onMoveDown: (id: string) => void;
 }) {
   const f = splitPath(it.path);
-  const isPdf = f.ext.toLowerCase() === "pdf";
+  const extLow = f.ext.toLowerCase();
+  const isPdf = extLow === "pdf";
+  const isImg = IMG_EXTS.includes(extLow);
+  const pdfRequired = mode === "merge" || mode === "split" || mode === "compress";
+  const invalidPdf = pdfRequired && !isPdf;
+  const invalidImg = mode === "img2pdf" && !isImg;
+  const invalidXlsx = mode === "convert" && effectiveFormat === "xlsx" && isPlainTextExt(extLow);
+
   const sub =
     it.metaState === "loading"
       ? "Leyendo propiedades…"
@@ -149,13 +187,22 @@ function DocQueueRowInternal({
         ? it.metaError ?? "No se pudo leer el archivo"
         : it.meta
           ? [
-              it.meta.pages ? `${it.meta.pages} página${it.meta.pages === 1 ? "" : "s"}` : null,
-              it.meta.words ? `≈ ${it.meta.words.toLocaleString()} palabras` : null,
-              it.meta.sizeBytes ? formatBytes(it.meta.sizeBytes) : null,
-            ]
-              .filter(Boolean)
-              .join(" · ")
+            isImg
+              ? it.meta.preview
+              : it.meta.pages
+                ? `${it.meta.pages} ${extLow === "xlsx" ? "hoja" : "página"}${it.meta.pages === 1 ? "" : "s"}`
+                : null,
+            !isImg && it.meta.words ? `≈ ${it.meta.words.toLocaleString()} palabras` : null,
+            it.meta.sizeBytes ? formatBytes(it.meta.sizeBytes) : null,
+          ]
+            .filter(Boolean)
+            .join(" · ")
           : f.dir || "—";
+
+  const savedPct =
+    mode === "compress" && resItem?.ok && resItem.sizeBytes != null && it.meta?.sizeBytes
+      ? Math.round((1 - resItem.sizeBytes / it.meta.sizeBytes) * 100)
+      : null;
 
   return (
     <motion.li
@@ -164,16 +211,15 @@ function DocQueueRowInternal({
       animate={{ opacity: 1, x: 0 }}
       exit={{ opacity: 0, x: 8 }}
       onClick={() => onSelect(it.id)}
-      className={`flex cursor-pointer items-center gap-3 rounded-xl border px-3 py-2 transition-colors ${
-        isSelected
+      className={`flex cursor-pointer items-center gap-3 rounded-xl border px-3 py-2 transition-colors ${isSelected
           ? "border-indigo-500/60 bg-indigo-600/10"
           : "border-transparent bg-[#23284f]/40 hover:bg-[#23284f]/70"
-      }`}
+        }`}
     >
-      {merge && (
+      {reorderable && (
         <span
           className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-indigo-600/25 text-xs font-bold text-indigo-300"
-          title={`Posición ${index + 1} en el documento final`}
+          title={`Posición ${index + 1} en el PDF final`}
         >
           {index + 1}
         </span>
@@ -186,30 +232,57 @@ function DocQueueRowInternal({
           </p>
           {mode === "convert" && (
             <span
-              className="inline-flex shrink-0 items-center rounded bg-indigo-500/20 px-1.5 py-0.5 text-[10px] font-bold text-indigo-300 uppercase"
-              title={`Formato de salida: ${it.targetFormat ? DOC_FORMAT_LABEL[it.targetFormat] : "PDF"}`}
+              className={`inline-flex shrink-0 items-center rounded px-1.5 py-0.5 text-[10px] font-bold uppercase ${invalidXlsx
+                  ? "bg-amber-500/20 text-amber-300"
+                  : "bg-indigo-500/20 text-indigo-300"
+                }`}
+              title={`Formato de salida: ${DOC_FORMAT_LABEL[effectiveFormat]}`}
             >
-              ➔ {(it.targetFormat ?? "pdf").toUpperCase()}
+              ➔ {effectiveFormat.toUpperCase()}
             </span>
           )}
-          {merge && !isPdf && (
+          {invalidPdf && (
             <span className="inline-flex shrink-0 items-center gap-1 rounded bg-rose-500/20 px-1.5 py-0.5 text-[10px] font-semibold text-rose-300">
               <AlertTriangle size={11} /> No es PDF
             </span>
           )}
+          {invalidImg && (
+            <span className="inline-flex shrink-0 items-center gap-1 rounded bg-rose-500/20 px-1.5 py-0.5 text-[10px] font-semibold text-rose-300">
+              <AlertTriangle size={11} /> No es imagen
+            </span>
+          )}
+          {invalidXlsx && (
+            <span className="inline-flex shrink-0 items-center gap-1 rounded bg-amber-500/20 px-1.5 py-0.5 text-[10px] font-semibold text-amber-300">
+              <AlertTriangle size={11} /> Sin tablas
+            </span>
+          )}
         </div>
-        <p className={`truncate text-xs ${it.metaState === "error" || (merge && !isPdf) ? "text-rose-300" : "text-slate-500"}`}>
-          {merge && !isPdf ? "Solo los archivos PDF pueden unirse" : sub}
+        <p
+          className={`truncate text-xs ${it.metaState === "error" || invalidPdf || invalidImg
+              ? "text-rose-300"
+              : invalidXlsx
+                ? "text-amber-300"
+                : "text-slate-500"
+            }`}
+        >
+          {invalidPdf
+            ? "Este modo solo admite archivos PDF"
+            : invalidImg
+              ? "Solo admite imágenes JPG, PNG o WebP"
+              : invalidXlsx
+                ? "Texto plano sin estructura tabular: usa PDF o DOCX como origen para Excel"
+                : sub}
         </p>
         {resItem?.ok && resItem.sizeBytes != null && (
           <p className="truncate text-xs font-medium text-emerald-300">
-            ✓ {merge ? "PDF generado" : "Salida real"}: {formatBytes(resItem.sizeBytes)} ({splitPath(resItem.dest).ext.toUpperCase()})
+            ✓ {mode === "merge" || mode === "img2pdf" ? "PDF generado" : "Salida real"}: {formatBytes(resItem.sizeBytes)}
+            {savedPct !== null && savedPct > 0 ? ` (−${savedPct}%)` : ""} ({splitPath(resItem.dest).ext.toUpperCase()})
           </p>
         )}
       </div>
 
-      {/* Controles de orden para el modo unir */}
-      {merge && total > 1 && (
+      {/* Controles de orden para Unir PDFs e Imágenes a PDF */}
+      {reorderable && total > 1 && (
         <div className="flex items-center gap-0.5">
           <button
             type="button"
@@ -245,7 +318,7 @@ function DocQueueRowInternal({
           type="button"
           onClick={(e) => {
             e.stopPropagation();
-            revealItemInDir(resItem.dest).catch(() => {});
+            revealItemInDir(resItem.dest).catch(() => { });
           }}
           className="rounded-md p-1.5 text-slate-400 transition-colors hover:bg-slate-700/40 hover:text-slate-100"
           aria-label="Mostrar en carpeta"
@@ -268,8 +341,6 @@ function DocQueueRowInternal({
       </button>
     </motion.li>
   );
-
-
 }
 
 const DocQueueRow = memo(DocQueueRowInternal);
@@ -293,6 +364,12 @@ const DOC_FORMAT_GLOSSARY: Record<
     pros: "Permite abrir y editar libremente el texto en Word, Google Docs o Writer.",
     structure: "Paquete comprimido OpenXML (ZIP) con párrafos fluidos.",
     useWhen: "quieres extraer el contenido de un PDF o archivo de texto para seguir redactándolo en Word.",
+  },
+  xlsx: {
+    tagline: "Libro de cálculo de Microsoft Excel y hojas electrónicas.",
+    pros: "Extrae tablas, filas y columnas estructuradas para análisis numérico y fórmulas.",
+    structure: "Libro de cálculo OpenXML (.xlsx) con celdas, filas y columnas autoajustadas.",
+    useWhen: "tienes tablas, estados de cuenta, listas o reportes tabulados en PDF o DOCX y necesitas editarlos en Excel.",
   },
   txt: {
     tagline: "Texto plano puro sin formato.",
@@ -353,7 +430,7 @@ function DocGlossaryDrawer({
               <div>
                 <h3 className="text-lg font-bold text-white">Glosario de documentos</h3>
                 <p className="mt-0.5 text-xs leading-relaxed text-slate-400">
-                  Conversión de texto estructurado y limpieza de privacidad en archivos PDF y Word.
+                  Herramientas para convertir, unir, dividir, compilar imágenes y optimizar PDFs.
                 </p>
               </div>
             </div>
@@ -371,7 +448,7 @@ function DocGlossaryDrawer({
             <div className="relative inline-flex rounded-xl bg-[#23284f]/60 p-1">
               {(
                 [
-                  ["mode", "Modos y diferencias"],
+                  ["mode", "Modos de trabajo"],
                   ["format", "Formatos de salida"],
                 ] as const
               ).map(([id, label]) => (
@@ -397,65 +474,65 @@ function DocGlossaryDrawer({
           <div className="flex-1 space-y-3 overflow-y-auto px-5 pb-5 pt-4">
             {tab === "mode" ? (
               <>
-                <div className="rounded-2xl border border-indigo-500/30 bg-indigo-600/10 p-4">
-                  <h4 className="text-xs font-bold uppercase tracking-wider text-indigo-300">
-                    Diferencia clave entre los tres modos
-                  </h4>
-                  <ul className="mt-2 space-y-1.5 text-xs leading-relaxed text-slate-300">
-                    <li>
-                      • <span className="font-semibold text-indigo-200">Convertir formato</span>{" "}
-                      <span className="text-slate-400">
-                        extrae los párrafos y reconstruye un documento nuevo en el formato elegido (PDF, DOCX, TXT o Markdown). Si conviertes de DOCX a PDF y tienes LibreOffice instalado, lo utiliza automáticamente para preservar tablas y estilos complejos.
-                      </span>
-                    </li>
-                    <li>
-                      • <span className="font-semibold text-indigo-200">Quitar metadatos</span>{" "}
-                      <span className="text-slate-400">
-                        conserva intactas las páginas, fuentes, tablas e imágenes del PDF o DOCX original, eliminando únicamente el autor, empresa, programa creador y fechas ocultas.
-                      </span>
-                    </li>
-                    <li>
-                      • <span className="font-semibold text-indigo-200">Unir PDFs</span>{" "}
-                      <span className="text-slate-400">
-                        combina múltiples archivos PDF en un solo documento final. Las páginas se agregan en el mismo orden en que aparecen en la lista de archivos. No se modifica el contenido de ninguna página.
-                      </span>
-                    </li>
-                  </ul>
-                </div>
-
                 <div
-                  className={`rounded-2xl border px-4 py-3 ${
-                    mode === "convert" ? "border-indigo-500/50 bg-indigo-600/10" : "border-[#23284f] bg-[#23284f]/30"
-                  }`}
+                  className={`rounded-2xl border px-4 py-3 ${mode === "convert" ? "border-indigo-500/50 bg-indigo-600/10" : "border-[#23284f] bg-[#23284f]/30"
+                    }`}
                 >
                   <h4 className="text-base font-bold text-white">Convertir formato</h4>
                   <p className="mt-1 text-xs leading-relaxed text-slate-400">
-                    Ideal para pasar de Word (DOCX) a PDF, extraer el texto de un PDF hacia un archivo editable DOCX/TXT/MD, o generar un PDF limpio a partir de notas en texto o Markdown.
+                    Transforma entre PDF, Word (DOCX), Excel (XLSX), TXT y Markdown usando motores nativos y automatización Office/LibreOffice cuando está disponible.
                   </p>
                 </div>
 
                 <div
-                  className={`rounded-2xl border px-4 py-3 ${
-                    mode === "strip" ? "border-indigo-500/50 bg-indigo-600/10" : "border-[#23284f] bg-[#23284f]/30"
-                  }`}
+                  className={`rounded-2xl border px-4 py-3 ${mode === "strip" ? "border-indigo-500/50 bg-indigo-600/10" : "border-[#23284f] bg-[#23284f]/30"
+                    }`}
                 >
                   <h4 className="text-base font-bold text-white">Quitar metadatos</h4>
                   <p className="mt-1 text-xs leading-relaxed text-slate-400">
-                    Borra el diccionario <span className="font-mono text-slate-200">/Info</span> y{" "}
-                    <span className="font-mono text-slate-200">/Metadata</span> en archivos PDF, y limpia{" "}
-                    <span className="font-mono text-slate-200">docProps/core.xml</span> y{" "}
-                    <span className="font-mono text-slate-200">app.xml</span> en archivos Word (nombre de usuario de tu PC, empresa, tiempos de edición y revisiones).
+                    Borra <span className="font-mono text-slate-200">/Info</span> y flujos{" "}
+                    <span className="font-mono text-slate-200">/Metadata</span> (XMP) en PDF, y limpia{" "}
+                    <span className="font-mono text-slate-200">core.xml</span> / <span className="font-mono text-slate-200">app.xml</span> en DOCX y XLSX sin alterar el contenido.
                   </p>
                 </div>
 
                 <div
-                  className={`rounded-2xl border px-4 py-3 ${
-                    mode === "merge" ? "border-indigo-500/50 bg-indigo-600/10" : "border-[#23284f] bg-[#23284f]/30"
-                  }`}
+                  className={`rounded-2xl border px-4 py-3 ${mode === "merge" ? "border-indigo-500/50 bg-indigo-600/10" : "border-[#23284f] bg-[#23284f]/30"
+                    }`}
                 >
                   <h4 className="text-base font-bold text-white">Unir PDFs</h4>
                   <p className="mt-1 text-xs leading-relaxed text-slate-400">
-                    Combina múltiples archivos PDF en un solo documento final. Las páginas se agregan en el mismo orden en que aparecen en la lista de archivos. No se modifica el contenido de ninguna página.
+                    Combina varios PDFs en un único documento manteniendo el orden de la lista.
+                  </p>
+                </div>
+
+                <div
+                  className={`rounded-2xl border px-4 py-3 ${mode === "split" ? "border-indigo-500/50 bg-indigo-600/10" : "border-[#23284f] bg-[#23284f]/30"
+                    }`}
+                >
+                  <h4 className="text-base font-bold text-white">Dividir PDF</h4>
+                  <p className="mt-1 text-xs leading-relaxed text-slate-400">
+                    Extrae páginas específicas (ejemplo: <span className="font-mono text-slate-200">1-3, 5, 8-10</span>) en un nuevo PDF o separa cada página en un archivo independiente.
+                  </p>
+                </div>
+
+                <div
+                  className={`rounded-2xl border px-4 py-3 ${mode === "img2pdf" ? "border-indigo-500/50 bg-indigo-600/10" : "border-[#23284f] bg-[#23284f]/30"
+                    }`}
+                >
+                  <h4 className="text-base font-bold text-white">Imágenes a PDF</h4>
+                  <p className="mt-1 text-xs leading-relaxed text-slate-400">
+                    Compila fotografías o escaneos (JPG, PNG, WebP) en un PDF tamaño A4 con orientación EXIF corregida y ajuste proporcional centrado.
+                  </p>
+                </div>
+
+                <div
+                  className={`rounded-2xl border px-4 py-3 ${mode === "compress" ? "border-indigo-500/50 bg-indigo-600/10" : "border-[#23284f] bg-[#23284f]/30"
+                    }`}
+                >
+                  <h4 className="text-base font-bold text-white">Comprimir PDF</h4>
+                  <p className="mt-1 text-xs leading-relaxed text-slate-400">
+                    Optimiza las imágenes incrustadas de alta resolución dentro del PDF manteniendo intactos los textos vectoriales y fuentes.
                   </p>
                 </div>
               </>
@@ -466,9 +543,8 @@ function DocGlossaryDrawer({
                 return (
                   <div
                     key={f}
-                    className={`rounded-2xl border px-4 py-3 ${
-                      active ? "border-indigo-500/50 bg-indigo-600/10" : "border-[#23284f] bg-[#23284f]/30"
-                    }`}
+                    className={`rounded-2xl border px-4 py-3 ${active ? "border-indigo-500/50 bg-indigo-600/10" : "border-[#23284f] bg-[#23284f]/30"
+                      }`}
                   >
                     <div className="flex items-center justify-between gap-2">
                       <h4 className="text-base font-bold text-white">{DOC_FORMAT_LABEL[f]}</h4>
@@ -512,6 +588,9 @@ function DocInspectionPanel({ dc }: { dc: DocConverter }) {
   const meta = sel?.meta ?? null;
   const strip = dc.mode === "strip";
   const merge = dc.mode === "merge";
+  const split = dc.mode === "split";
+  const img2pdf = dc.mode === "img2pdf";
+  const compress = dc.mode === "compress";
   const doneItem = sel ? dc.results?.find((r) => r.source === sel.path && r.ok) ?? null : null;
 
   const state = !sel
@@ -526,46 +605,60 @@ function DocInspectionPanel({ dc }: { dc: DocConverter }) {
 
   let body: React.ReactNode = null;
 
-  if (merge) {
-    /* ── Vista especial para modo "Unir PDFs" ── */
+  if (merge || img2pdf) {
     const readyItems = dc.items.filter((it) => it.metaState === "ready" && it.meta);
     const totalPages = readyItems.reduce((sum, it) => sum + (it.meta?.pages ?? 0), 0);
     const totalSize = readyItems.reduce((sum, it) => sum + (it.meta?.sizeBytes ?? 0), 0);
-    const mergeResult = dc.results?.[0];
+    const finalResult = dc.results?.[0];
 
     body = (
       <div className="space-y-4">
         <div className="rounded-2xl bg-[#23284f]/50 px-4 py-3">
           <div className="flex items-center gap-2">
-            <Combine size={16} className="text-indigo-300" />
-            <p className="text-[11px] uppercase tracking-wider text-slate-400">Resumen de unión</p>
+            {img2pdf ? (
+              <ImageIcon size={16} className="text-indigo-300" />
+            ) : (
+              <Combine size={16} className="text-indigo-300" />
+            )}
+            <p className="text-[11px] uppercase tracking-wider text-slate-400">
+              {img2pdf ? "Compilación de imágenes a PDF" : "Resumen de unión"}
+            </p>
           </div>
           <p className="mt-1 text-sm font-semibold text-slate-100">
-            {dc.items.length === 0
-              ? "Añade archivos PDF para combinarlos en un solo documento"
-              : dc.items.length === 1
-                ? "Necesitas al menos 2 archivos PDF para unirlos"
-                : `Se unirán ${dc.items.length} archivos PDF en orden`}
+            {img2pdf
+              ? dc.items.length === 0
+                ? "Añade imágenes JPG, PNG o WebP para crear un PDF A4"
+                : `Se compilarán ${dc.items.length} imagen(es) en un PDF A4`
+              : dc.items.length === 0
+                ? "Añade archivos PDF para combinarlos en un solo documento"
+                : dc.items.length === 1
+                  ? "Necesitas al menos 2 archivos PDF para unirlos"
+                  : `Se unirán ${dc.items.length} archivos PDF en orden`}
           </p>
           <p className="mt-0.5 text-xs text-slate-400">
-            Las páginas se agregan secuencialmente respetando el orden de la lista.
+            {img2pdf
+              ? "Cada imagen se ajusta proporcionalmente en una hoja A4 con márgenes."
+              : "Las páginas se agregan secuencialmente respetando el orden de la lista."}
           </p>
         </div>
 
         <div className="grid grid-cols-2 gap-3">
-          <Stat label="Archivos" value={`${dc.items.length}`} />
+          <Stat label={img2pdf ? "Imágenes" : "Archivos"} value={`${dc.items.length}`} />
           <Stat label="Páginas totales" value={totalPages > 0 ? `${totalPages}` : "—"} />
         </div>
 
         <div className="grid grid-cols-2 gap-3">
-          <Stat label="Tamaño combinado" value={totalSize > 0 ? formatBytes(totalSize) : "—"} />
-          <Stat label="Salida estimada" value={mergeResult?.sizeBytes ? formatBytes(mergeResult.sizeBytes) : "≈ Variable"} />
+          <Stat label="Tamaño origen" value={totalSize > 0 ? formatBytes(totalSize) : "—"} />
+          <Stat
+            label={finalResult?.sizeBytes ? "Tamaño final" : "Salida estimada"}
+            value={finalResult?.sizeBytes ? formatBytes(finalResult.sizeBytes) : "≈ Variable"}
+          />
         </div>
 
         {dc.items.length > 0 && (
           <div className="rounded-2xl border border-[#23284f] bg-[#0e1122]/90 p-3.5">
             <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
-              Orden de las páginas
+              Orden en el PDF final
             </p>
             <ol className="mt-1.5 space-y-1">
               {dc.items.map((it, idx) => {
@@ -576,7 +669,7 @@ function DocInspectionPanel({ dc }: { dc: DocConverter }) {
                       {idx + 1}
                     </span>
                     <span className="truncate" title={it.path}>{f.file}</span>
-                    {it.meta?.pages != null && (
+                    {!img2pdf && it.meta?.pages != null && (
                       <span className="ml-auto shrink-0 text-slate-500">{it.meta.pages} pág.</span>
                     )}
                   </li>
@@ -594,7 +687,7 @@ function DocInspectionPanel({ dc }: { dc: DocConverter }) {
           <FileText size={28} />
         </div>
         <p className="max-w-[260px] text-sm text-slate-500">
-          Añade documentos PDF, DOCX, TXT o Markdown para inspeccionar su contenido, páginas y metadatos.
+          Añade documentos para inspeccionar su contenido, páginas, imágenes incrustadas y metadatos.
         </p>
       </div>
     );
@@ -612,7 +705,92 @@ function DocInspectionPanel({ dc }: { dc: DocConverter }) {
   } else if (state === "error") {
     body = <Notice tone="error">{sel?.metaError}</Notice>;
   } else if (meta && sel) {
-    if (strip) {
+    if (split) {
+      const splitResult = dc.results?.[0];
+      body = (
+        <div className="space-y-4">
+          <div className="rounded-2xl bg-[#23284f]/50 px-4 py-3">
+            <div className="flex items-center gap-2">
+              <Scissors size={16} className="text-indigo-300" />
+              <p className="text-[11px] uppercase tracking-wider text-slate-400">División de PDF</p>
+            </div>
+            <p className="mt-1 text-sm font-semibold text-slate-100">
+              {dc.splitMode === "extract"
+                ? `Extracción de rango (${dc.pageRange || "sin definir"}) en 1 archivo PDF`
+                : dc.pageRange.trim()
+                  ? `Separación individual de páginas (${dc.pageRange})`
+                  : `Separación de las ${meta.pages ?? "?"} páginas en archivos individuales`}
+            </p>
+            <p className="mt-0.5 text-xs text-slate-400">
+              Conserva las fuentes, vectores y calidad original de cada página extraída.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <Stat label="Páginas del PDF" value={meta.pages ? `${meta.pages}` : "—"} />
+            <Stat label="Tamaño origen" value={formatBytes(meta.sizeBytes)} />
+          </div>
+
+          {splitResult?.ok && splitResult.sizeBytes != null && (
+            <Stat label="Tamaño generado" value={formatBytes(splitResult.sizeBytes)} />
+          )}
+
+          <div className="rounded-2xl border border-[#23284f] bg-[#0e1122]/90 p-3.5">
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+              Vista previa de texto
+            </p>
+            <p className="mt-1.5 line-clamp-5 whitespace-pre-line font-mono text-xs leading-relaxed text-slate-300">
+              {meta.preview || "(PDF sin texto seleccionable)"}
+            </p>
+          </div>
+        </div>
+      );
+    } else if (compress) {
+      const savedPct =
+        doneItem?.sizeBytes != null && meta.sizeBytes > 0
+          ? Math.round((1 - doneItem.sizeBytes / meta.sizeBytes) * 100)
+          : null;
+
+      body = (
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 gap-3 border-b border-[#1e293b] pb-2 text-xs font-semibold uppercase tracking-wider">
+            <span className="text-slate-400">Original</span>
+            <span className="text-indigo-300">{doneItem ? "PDF Comprimido" : "Nivel seleccionado"}</span>
+          </div>
+
+          <Row label="Páginas" from={meta.pages ? `${meta.pages}` : "—"} to={meta.pages ? `${meta.pages}` : "—"} />
+          <Row
+            label="Imágenes internas"
+            from={meta.embeddedImages > 0 ? `${meta.embeddedImages} detectada(s)` : "Ninguna"}
+            to={meta.embeddedImages > 0 ? "Recompresión inteligente" : "Solo flujos vectoriales"}
+          />
+          <Row
+            label="Nivel"
+            from="Sin comprimir"
+            to={COMPRESS_LEVEL_LABEL[dc.compressLevel]}
+          />
+          <Row
+            label="Tamaño en disco"
+            from={formatBytes(meta.sizeBytes)}
+            to={
+              doneItem?.sizeBytes != null
+                ? `${formatBytes(doneItem.sizeBytes)}${savedPct !== null && savedPct > 0 ? ` (−${savedPct}%)` : ""}`
+                : "Variable según imágenes"
+            }
+          />
+
+          <div className="rounded-2xl bg-[#23284f]/50 px-4 py-3">
+            <div className="flex items-center gap-2">
+              <FileArchive size={16} className="text-indigo-300" />
+              <p className="text-[11px] uppercase tracking-wider text-slate-400">Optimización sin pérdida de texto</p>
+            </div>
+            <p className="mt-1 text-xs leading-relaxed text-slate-300">
+              El texto, tablas vectoriales y firmas con transparencia se mantienen intactos; solo se reducen fotografías y capturas pesadas.
+            </p>
+          </div>
+        </div>
+      );
+    } else if (strip) {
       body = (
         <div className="space-y-4">
           <div className="grid grid-cols-2 gap-3 border-b border-[#1e293b] pb-2 text-xs font-semibold uppercase tracking-wider">
@@ -621,7 +799,11 @@ function DocInspectionPanel({ dc }: { dc: DocConverter }) {
           </div>
 
           <Row label="Formato" from={meta.format} to={`${meta.format} (Intacto)`} />
-          <Row label="Páginas" from={meta.pages ? `${meta.pages}` : "—"} to={meta.pages ? `${meta.pages}` : "—"} />
+          <Row
+            label={meta.format === "XLSX" ? "Hojas" : "Páginas"}
+            from={meta.pages ? `${meta.pages}` : "—"}
+            to={meta.pages ? `${meta.pages}` : "—"}
+          />
           <Row
             label="Autor registrado"
             from={meta.author ?? "No contiene"}
@@ -654,13 +836,14 @@ function DocInspectionPanel({ dc }: { dc: DocConverter }) {
                 : "Este documento no presenta metadatos personales visibles"}
             </p>
             <p className="mt-0.5 text-xs text-slate-400">
-              Se eliminan las propiedades ocultas conservando el diseño, texto e imágenes del documento original.
+              Se eliminan las propiedades ocultas y flujos XMP conservando el diseño, texto e imágenes del documento original.
             </p>
           </div>
         </div>
       );
     } else {
-      const outFmt = merge ? "PDF (Unido)" : dc.format.toUpperCase();
+      const targetFmt = dc.isIndividual ? (sel.targetFormat ?? dc.format) : dc.format;
+      const outFmt = targetFmt.toUpperCase();
       body = (
         <div className="space-y-4">
           <div className="grid grid-cols-2 gap-3 border-b border-[#1e293b] pb-2 text-xs font-semibold uppercase tracking-wider">
@@ -672,7 +855,15 @@ function DocInspectionPanel({ dc }: { dc: DocConverter }) {
           <Row
             label="Páginas estimadas"
             from={meta.pages ? `${meta.pages}` : "—"}
-            to={dc.format === "txt" || dc.format === "md" ? "Flujo continuo" : meta.pages ? `≈ ${meta.pages}` : "—"}
+            to={
+              targetFmt === "txt" || targetFmt === "md"
+                ? "Flujo continuo"
+                : targetFmt === "xlsx"
+                  ? "Libro de cálculo"
+                  : meta.pages
+                    ? `≈ ${meta.pages}`
+                    : "—"
+            }
           />
           <Row
             label="Palabras / Caracteres"
@@ -684,8 +875,8 @@ function DocInspectionPanel({ dc }: { dc: DocConverter }) {
             from={meta.embeddedImages > 0 ? `${meta.embeddedImages} detectada(s)` : "Ninguna"}
             to={
               meta.embeddedImages > 0
-                ? dc.format === "txt" || dc.format === "md"
-                  ? "Solo texto"
+                ? targetFmt === "txt" || targetFmt === "md" || targetFmt === "xlsx"
+                  ? "Solo texto / tablas"
                   : "Extracción de texto"
                 : "Ninguna"
             }
@@ -701,7 +892,6 @@ function DocInspectionPanel({ dc }: { dc: DocConverter }) {
             to={doneItem?.sizeBytes ? formatBytes(doneItem.sizeBytes) : "Variable según formato"}
           />
 
-          {/* Vista previa de las primeras líneas del documento */}
           <div className="rounded-2xl border border-[#23284f] bg-[#0e1122]/90 p-3.5">
             <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
               Vista previa de texto extraído
@@ -721,7 +911,7 @@ function DocInspectionPanel({ dc }: { dc: DocConverter }) {
         <FileText size={18} className="text-indigo-300" />
         <h3 className="text-lg font-bold text-white">Inspección de documento</h3>
       </div>
-      {sel && !merge && (
+      {sel && !merge && !img2pdf && (
         <p className="truncate text-xs text-slate-500" title={sel.path}>
           {splitPath(sel.path).file}
         </p>
@@ -729,7 +919,7 @@ function DocInspectionPanel({ dc }: { dc: DocConverter }) {
       <div className="flex flex-1 flex-col">
         <AnimatePresence mode="wait" initial={false}>
           <motion.div
-            key={`${merge ? "merge" : state}-${merge ? "all" : sel?.id ?? ""}-${dc.mode}`}
+            key={`${merge || img2pdf ? "multi" : state}-${merge || img2pdf ? "all" : sel?.id ?? ""}-${dc.mode}`}
             initial={{ opacity: 0, y: 6 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -6 }}
@@ -751,6 +941,10 @@ export function DocTab({ dc }: { dc: DocConverter }) {
   const running = dc.status === "running";
   const strip = dc.mode === "strip";
   const merge = dc.mode === "merge";
+  const split = dc.mode === "split";
+  const img2pdf = dc.mode === "img2pdf";
+  const compress = dc.mode === "compress";
+  const reorderable = merge || img2pdf;
   const n = dc.items.length;
   const isBatch = n > 1;
 
@@ -776,6 +970,25 @@ export function DocTab({ dc }: { dc: DocConverter }) {
     return m;
   }, [dc.results]);
 
+  const invalidXlsxItems = useMemo(() => {
+    if (dc.mode !== "convert") return [];
+    return dc.items.filter((it) => {
+      const target = dc.isIndividual ? (it.targetFormat ?? dc.format) : dc.format;
+      if (target !== "xlsx") return false;
+      return isPlainTextExt(splitPath(it.path).ext);
+    });
+  }, [dc.mode, dc.items, dc.isIndividual, dc.format]);
+
+  const hasNonPdf = useMemo(() => {
+    if (!merge && !split && !compress) return false;
+    return dc.items.some((it) => splitPath(it.path).ext.toLowerCase() !== "pdf");
+  }, [merge, split, compress, dc.items]);
+
+  const hasNonImg = useMemo(() => {
+    if (!img2pdf) return false;
+    return dc.items.some((it) => !IMG_EXTS.includes(splitPath(it.path).ext.toLowerCase()));
+  }, [img2pdf, dc.items]);
+
   const pct =
     dc.status === "done"
       ? 100
@@ -790,24 +1003,62 @@ export function DocTab({ dc }: { dc: DocConverter }) {
   const startLabel = running
     ? merge
       ? "Uniendo PDFs…"
-      : strip
-        ? "Limpiando…"
-        : "Convirtiendo…"
+      : split
+        ? "Dividiendo PDF…"
+        : img2pdf
+          ? "Creando PDF…"
+          : compress
+            ? "Comprimiendo…"
+            : strip
+              ? "Limpiando…"
+              : "Convirtiendo…"
     : merge
       ? isBatch
         ? `Unir PDFs (${n})`
         : "Unir PDFs"
-      : strip
-        ? isBatch
-          ? `Quitar metadatos (${n})`
-          : "Quitar metadatos"
-        : isBatch
-          ? `Convertir lote (${n})`
-          : "Convertir documento";
+      : split
+        ? dc.splitMode === "extract"
+          ? "Extraer páginas"
+          : "Separar páginas"
+        : img2pdf
+          ? isBatch
+            ? `Crear PDF (${n} imágenes)`
+            : "Crear PDF"
+          : compress
+            ? isBatch
+              ? `Comprimir PDFs (${n})`
+              : "Comprimir PDF"
+            : strip
+              ? isBatch
+                ? `Quitar metadatos (${n})`
+                : "Quitar metadatos"
+              : isBatch
+                ? `Convertir lote (${n})`
+                : "Convertir documento";
 
-  const startDisabled = merge ? n < 2 : n === 0;
+  const startDisabled = merge
+    ? n < 2 || hasNonPdf
+    : split
+      ? n === 0 || hasNonPdf || (dc.splitMode === "extract" && !dc.pageRange.trim())
+      : img2pdf
+        ? n === 0 || hasNonImg
+        : compress
+          ? n === 0 || hasNonPdf
+          : n === 0 || invalidXlsxItems.length > 0;
 
   const noInternalLabel = "[&>div>span:first-child]:hidden";
+
+  const dropTitle = img2pdf
+    ? "Arrastra imágenes aquí o haz clic para elegirlas"
+    : merge || split || compress
+      ? "Arrastra archivos PDF aquí o haz clic para elegirlos"
+      : "Arrastra documentos aquí o haz clic para elegirlos";
+
+  const dropSubtitle = img2pdf
+    ? "JPG, PNG o WebP (se compilarán en páginas A4 en el orden de la lista)"
+    : merge || split || compress
+      ? "Archivos PDF (*.pdf)"
+      : "PDF, DOCX (Word), XLSX (Excel), TXT o Markdown (.md)";
 
   return (
     <div className="grid gap-5 lg:grid-cols-2 xl:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)_minmax(0,0.9fr)]">
@@ -815,7 +1066,7 @@ export function DocTab({ dc }: { dc: DocConverter }) {
       <Card data-drop-zone="true" className="flex flex-col gap-5">
         <section className="flex min-h-0 flex-1 flex-col gap-3">
           <div className="flex items-center justify-between">
-            <Step n={1}>Documentos de origen</Step>
+            <Step n={1}>{img2pdf ? "Imágenes de origen" : "Documentos de origen"}</Step>
             {n > 0 && (
               <div className="flex items-center gap-2">
                 <motion.span
@@ -840,7 +1091,9 @@ export function DocTab({ dc }: { dc: DocConverter }) {
 
           {n > 0 && (
             <p className="text-xs text-slate-500">
-              Haz clic en un documento para inspeccionar <span className="text-slate-300">sus páginas, palabras y vista previa</span>.
+              {reorderable
+                ? "Usa las flechas para ordenar el orden en que aparecerán las páginas en el PDF."
+                : "Haz clic en un documento para inspeccionar sus páginas, palabras y vista previa."}
             </p>
           )}
 
@@ -887,15 +1140,14 @@ export function DocTab({ dc }: { dc: DocConverter }) {
                 disabled={running}
                 onBrowse={dc.pick}
                 icon={<UploadCloud size={28} />}
-                title="Arrastra documentos aquí o haz clic para elegirlos"
-                subtitle="PDF, DOCX (Word), TXT o Markdown (.md)"
+                title={dropTitle}
+                subtitle={dropSubtitle}
               />
             </div>
           ) : (
             <div
-              className={`min-h-[200px] flex-1 rounded-2xl border-2 border-dashed p-2 transition-colors ${
-                hover ? "border-indigo-500 bg-indigo-600/10" : "border-transparent"
-              }`}
+              className={`min-h-[200px] flex-1 rounded-2xl border-2 border-dashed p-2 transition-colors ${hover ? "border-indigo-500 bg-indigo-600/10" : "border-transparent"
+                }`}
             >
               {hover && <p className="pb-2 text-center text-xs text-indigo-300">Suelta aquí para añadirlos</p>}
               <ul className="max-h-[42vh] space-y-1.5 overflow-y-auto pr-1">
@@ -907,8 +1159,9 @@ export function DocTab({ dc }: { dc: DocConverter }) {
                       index={index}
                       total={n}
                       isSelected={dc.selected?.id === it.id}
-                      merge={merge}
+                      reorderable={reorderable}
                       mode={dc.mode}
+                      effectiveFormat={dc.isIndividual ? (it.targetFormat ?? dc.format) : dc.format}
                       running={running}
                       resItem={resultsMap?.get(it.path)}
                       onSelect={handleSelect}
@@ -917,132 +1170,6 @@ export function DocTab({ dc }: { dc: DocConverter }) {
                       onMoveDown={handleMoveDown}
                     />
                   ))}
-                  {false && ([] as any[]).map((it: any, index: any) => {
-                    const f = splitPath(it.path);
-                    const isSelected = dc.selected?.id === it.id;
-                    const resItem = dc.results?.find((r) => r.source === it.path);
-                    const isPdf = f.ext === "pdf";
-
-                    const sub =
-                      it.metaState === "loading"
-                        ? "Analizando documento…"
-                        : it.metaState === "error"
-                          ? it.metaError ?? "No se pudo leer el archivo"
-                          : it.meta
-                            ? [
-                                it.meta.pages ? `${it.meta.pages} pág.` : null,
-                                `${it.meta.words.toLocaleString("en-US")} palabras`,
-                                formatBytes(it.meta.sizeBytes),
-                              ]
-                                .filter(Boolean)
-                                .join(" · ")
-                            : f.dir || "—";
-
-                    return (
-                      <motion.li
-                        key={it.id}
-                        layout
-                        initial={{ opacity: 0, x: -8 }}
-                        animate={{ opacity: 1, x: 0 }}
-                        exit={{ opacity: 0, x: 8 }}
-                        onClick={() => dc.select(it.id)}
-                        className={`flex cursor-pointer items-center gap-3 rounded-xl border px-3 py-2 transition-colors ${
-                          isSelected
-                            ? "border-indigo-500/60 bg-indigo-600/10"
-                            : "border-transparent bg-[#23284f]/40 hover:bg-[#23284f]/70"
-                        }`}
-                      >
-                        {merge && (
-                          <span
-                            className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-indigo-600/25 text-xs font-bold text-indigo-300"
-                            title={`Posición ${index + 1} en el documento final`}
-                          >
-                            {index + 1}
-                          </span>
-                        )}
-                        <DocBadge ext={f.ext} />
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-2">
-                            <p className="truncate text-sm font-medium text-slate-200" title={it.path}>
-                              {f.file}
-                            </p>
-                            {merge && !isPdf && (
-                              <span className="inline-flex shrink-0 items-center gap-1 rounded bg-rose-500/20 px-1.5 py-0.5 text-[10px] font-semibold text-rose-300">
-                                <AlertTriangle size={11} /> No es PDF
-                              </span>
-                            )}
-                          </div>
-                          <p className={`truncate text-xs ${it.metaState === "error" || (merge && !isPdf) ? "text-rose-300" : "text-slate-500"}`}>
-                            {merge && !isPdf ? "Solo los archivos PDF pueden unirse" : sub}
-                          </p>
-                          {resItem?.ok && resItem.sizeBytes != null && (
-                            <p className="truncate text-xs font-medium text-emerald-300">
-                              ✓ {merge ? "PDF generado" : "Salida real"}: {formatBytes(resItem.sizeBytes)} ({splitPath(resItem.dest).ext.toUpperCase()})
-                            </p>
-                          )}
-                        </div>
-
-                        {/* Controles de orden para el modo unir */}
-                        {merge && n > 1 && (
-                          <div className="flex items-center gap-0.5">
-                            <button
-                              type="button"
-                              disabled={running || index === 0}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                dc.moveItem(it.id, "up");
-                              }}
-                              className="rounded-md p-1 text-slate-400 transition-colors hover:bg-slate-700/50 hover:text-slate-200 disabled:opacity-20"
-                              aria-label="Mover hacia arriba"
-                              title="Mover hacia arriba"
-                            >
-                              <ArrowUp size={13} />
-                            </button>
-                            <button
-                              type="button"
-                              disabled={running || index === n - 1}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                dc.moveItem(it.id, "down");
-                              }}
-                              className="rounded-md p-1 text-slate-400 transition-colors hover:bg-slate-700/50 hover:text-slate-200 disabled:opacity-20"
-                              aria-label="Mover hacia abajo"
-                              title="Mover hacia abajo"
-                            >
-                              <ArrowDown size={13} />
-                            </button>
-                          </div>
-                        )}
-
-                        {resItem?.ok && (
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              revealItemInDir(resItem.dest).catch(() => {});
-                            }}
-                            className="rounded-md p-1.5 text-slate-400 transition-colors hover:bg-slate-700/40 hover:text-slate-100"
-                            aria-label="Mostrar en carpeta"
-                            title="Mostrar en carpeta"
-                          >
-                            <FolderOpen size={14} />
-                          </button>
-                        )}
-                        <button
-                          type="button"
-                          disabled={running}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            dc.removeFile(it.id);
-                          }}
-                          className="rounded-md p-1.5 text-slate-500 transition-colors hover:bg-slate-700/40 hover:text-slate-200 disabled:opacity-40"
-                          aria-label="Quitar"
-                        >
-                          <X size={14} />
-                        </button>
-                      </motion.li>
-                    );
-                  })}
                 </AnimatePresence>
               </ul>
             </div>
@@ -1073,21 +1200,23 @@ export function DocTab({ dc }: { dc: DocConverter }) {
                 {running
                   ? merge
                     ? "Uniendo PDFs…"
-                    : strip
-                      ? "Limpiando metadatos…"
-                      : "Convirtiendo documentos…"
+                    : split
+                      ? "Dividiendo PDF…"
+                      : img2pdf
+                        ? "Compilando imágenes a PDF…"
+                        : compress
+                          ? "Comprimiendo PDFs…"
+                          : strip
+                            ? "Limpiando metadatos…"
+                            : "Convirtiendo documentos…"
                   : dc.status === "done"
-                    ? merge
-                      ? "PDFs unidos"
-                      : strip
-                        ? "Limpieza completada"
-                        : "Conversión completada"
+                    ? "Proceso completado"
                     : "Operación fallida"}
               </span>
 
               {dc.status !== "error" && <ProgressBar value={pct} />}
 
-              {isBatch && !merge && dc.status !== "error" && (
+              {isBatch && !reorderable && !split && dc.status !== "error" && (
                 <div className="grid grid-cols-2 gap-3">
                   <Stat label="Completados" value={`${dc.progress?.done ?? 0} / ${dc.progress?.total ?? n}`} />
                   <Stat label="Progreso" value={`${(pct ?? 0).toFixed(0)}%`} />
@@ -1103,13 +1232,17 @@ export function DocTab({ dc }: { dc: DocConverter }) {
                       <span>
                         {merge
                           ? `Documento PDF unido con éxito (${n} archivos combinados)`
-                          : `${okCount} ${strip ? "limpiado" : "convertido"}${okCount === 1 ? "" : "s"}`}
+                          : img2pdf
+                            ? `PDF A4 generado con éxito (${n} imágenes)`
+                            : split
+                              ? "Páginas extraídas con éxito"
+                              : `${okCount} archivo${okCount === 1 ? "" : "s"} procesado${okCount === 1 ? "" : "s"}`}
                         {failed.length > 0 && ` · ${failed.length} con error`}
                       </span>
                       {firstOk && (
                         <button
                           type="button"
-                          onClick={() => revealItemInDir(firstOk.dest).catch(() => {})}
+                          onClick={() => revealItemInDir(firstOk.dest).catch(() => { })}
                           className="inline-flex items-center gap-2 rounded-lg border border-current/30 px-3 py-1.5 text-xs font-medium transition-colors hover:bg-white/5"
                         >
                           <FolderOpen size={14} /> Mostrar en carpeta
@@ -1148,7 +1281,6 @@ export function DocTab({ dc }: { dc: DocConverter }) {
           </button>
         </div>
 
-        {/* Aclara a qué documento pertenecen estas opciones (mismo estilo armonioso que VideoTab) */}
         {dc.mode === "convert" && (
           <div className="rounded-2xl border border-indigo-500/25 bg-indigo-600/10 px-4 py-3">
             <p className="text-[11px] font-semibold uppercase tracking-wider text-indigo-300">
@@ -1216,20 +1348,105 @@ export function DocTab({ dc }: { dc: DocConverter }) {
               active={glossary === "format"}
               onHelp={() => setGlossary((g) => (g === "format" ? null : "format"))}
             />
+            <div className={noInternalLabel}>
+              <Segmented
+                label=""
+                value={dc.format}
+                options={DOC_FORMATS}
+                labels={DOC_FORMAT_LABEL}
+                onChange={dc.setFormat}
+                disabled={running}
+              />
+            </div>
+
+            {invalidXlsxItems.length > 0 && (
+              <div className="mt-3">
+                <Notice tone="warn">
+                  La exportación a <strong>XLSX (Excel)</strong> requiere un archivo <strong>PDF</strong> o{" "}
+                  <strong>DOCX</strong> con tablas o datos estructurados. No se admite desde texto plano (
+                  {invalidXlsxItems.map((it) => splitPath(it.path).file).join(", ")}).
+                </Notice>
+              </div>
+            )}
+          </div>
+        )}
+
+        {split && (
+          <div className="space-y-4">
+            <div>
+              <span className="mb-2 block text-xs font-medium uppercase tracking-wider text-slate-500">
+                Tipo de división
+              </span>
               <div className={noInternalLabel}>
                 <Segmented
                   label=""
-                  value={dc.format}
-                  options={DOC_FORMATS}
-                  labels={DOC_FORMAT_LABEL}
-                  onChange={dc.setFormat}
+                  value={dc.splitMode}
+                  options={SPLIT_MODES}
+                  labels={SPLIT_MODE_LABEL}
+                  onChange={dc.setSplitMode}
                   disabled={running}
                 />
               </div>
             </div>
+
+            <div>
+              <label className="mb-1.5 block text-xs font-medium uppercase tracking-wider text-slate-500">
+                {dc.splitMode === "extract" ? "Páginas o rangos a extraer" : "Páginas específicas (opcional)"}
+              </label>
+              <input
+                type="text"
+                disabled={running}
+                value={dc.pageRange}
+                onChange={(e) => dc.setPageRange(e.target.value)}
+                placeholder={dc.splitMode === "extract" ? "Ej: 1-3, 5, 8-10" : "Vacío = todas las páginas por separado"}
+                className="w-full rounded-xl border border-[#23284f] bg-[#0e1122] px-3.5 py-2.5 font-mono text-sm text-slate-100 outline-none focus:border-indigo-500/70 disabled:opacity-50"
+              />
+              <p className="mt-1.5 text-xs text-slate-400">
+                {dc.splitMode === "extract"
+                  ? "Separa con comas páginas individuales o rangos con guion (ej. 1-4, 7)."
+                  : "Si lo dejas en blanco, cada página del PDF se guardará como un archivo independiente."}
+              </p>
+            </div>
+          </div>
         )}
 
-</Card>
+        {compress && (
+          <div className="space-y-3">
+            <span className="block text-xs font-medium uppercase tracking-wider text-slate-500">
+              Nivel de compresión
+            </span>
+            <div className={noInternalLabel}>
+              <Segmented
+                label=""
+                value={dc.compressLevel}
+                options={COMPRESS_LEVELS}
+                labels={COMPRESS_LEVEL_LABEL}
+                onChange={dc.setCompressLevel}
+                disabled={running}
+              />
+            </div>
+            <p className="text-xs leading-relaxed text-slate-400">
+              {dc.compressLevel === "low"
+                ? "Mantiene resolución hasta 2000 px y calidad JPEG 85%: reducción discreta sin pérdida apreciable."
+                : dc.compressLevel === "medium"
+                  ? "Equilibrio ideal (máx. 1400 px, calidad 72%): reduce notablemente el peso de reportes con capturas."
+                  : "Máximo ahorro de espacio (máx. 1000 px, calidad 55%): ideal para límites de subida estrictos."}
+            </p>
+          </div>
+        )}
+
+        {img2pdf && (
+          <div className="rounded-2xl border border-[#23284f] bg-[#0e1122]/70 p-4 text-xs leading-relaxed text-slate-400">
+            <p className="font-semibold text-slate-200">Configuración de página automática</p>
+            <p className="mt-1">
+              • Tamaño de hoja: <span className="text-indigo-300">A4 estándar (210 × 297 mm)</span> con márgenes limpios.
+            </p>
+            <p className="mt-0.5">
+              • Respeta la rotación EXIF original de cámaras y teléfonos sin recortar ni deformar las fotos.
+            </p>
+          </div>
+        )}
+      </Card>
 
       {/* ───── Columna 3: Inspección de documento ───── */}
       <DocInspectionPanel dc={dc} />

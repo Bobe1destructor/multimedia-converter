@@ -58,8 +58,8 @@ export function NativeUpdateBanner({ status, onDismiss }: NativeUpdateBannerProp
               <p className="text-xs text-slate-300">
                 {installing
                   ? progress !== null && progress < 100
-                    ? `Descargando e instalando parche… (${progress}%)`
-                    : "Reiniciando la aplicación…"
+                    ? `Descargando parche… (${progress}%)`
+                    : "Aplicando actualización en silencio; la app se cerrará y reabrirá sola en unos segundos…"
                   : "Se actualizará y reiniciará el programa automáticamente sin salir de la app."}
               </p>
             </div>
@@ -142,4 +142,3 @@ export function NativeUpdateBanner({ status, onDismiss }: NativeUpdateBannerProp
     </AnimatePresence>
   );
 }
-

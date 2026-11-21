@@ -1,6 +1,7 @@
 param(
-    [string]$Version = "0.3.5",
-    [string]$Notes = "Actualizacion v0.3.5"
+    [string]$Version = "0.3.9",
+    [string]$Notes = "Actualizacion v0.3.9",
+    [string]$TagPrefix = ""
 )
 
 $sigFile = "src-tauri\target\release\bundle\nsis\multimedia-converter_${Version}_x64-setup.nsis.zip.sig"
@@ -12,20 +13,23 @@ if (-not (Test-Path $sigFile)) {
 
 $signature = (Get-Content $sigFile -Raw).Trim()
 $pubDate = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+$releaseTag = "${TagPrefix}${Version}"
 
 $latest = @{
-    version = $Version
-    notes = $Notes
+    version  = $Version
+    notes    = $Notes
     pub_date = $pubDate
     platforms = @{
         "windows-x86_64" = @{
             signature = $signature
-            url = "https://github.com/Bobe1destructor/multimedia-converter/releases/download/${Version}/multimedia-converter_${Version}_x64-setup.nsis.zip"
+            url       = "https://github.com/Bobe1destructor/multimedia-converter/releases/download/${releaseTag}/multimedia-converter_${Version}_x64-setup.nsis.zip"
         }
     }
 }
 
 $jsonOutput = $latest | ConvertTo-Json -Depth 5
-Set-Content -Path "src-tauri\target\release\bundle\nsis\latest.json" -Value $jsonOutput -Encoding UTF8
-Write-Host "Creado con exito src-tauri\target\release\bundle\nsis\latest.json" -ForegroundColor Green
+$outPath = Join-Path (Get-Location) "src-tauri\target\release\bundle\nsis\latest.json"
+$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+[System.IO.File]::WriteAllText($outPath, $jsonOutput, $utf8NoBom)
 
+Write-Host "Creado sin BOM: $outPath" -ForegroundColor Green

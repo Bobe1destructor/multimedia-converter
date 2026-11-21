@@ -1,5 +1,6 @@
 mod commands;
 mod docs;
+pub mod logger;
 
 use tauri::Manager;
 
@@ -46,24 +47,11 @@ mod win32_icon {
             cy: i32,
             fuLoad: u32,
         ) -> HANDLE;
-        pub fn SendMessageW(
-            hWnd: HWND,
-            Msg: u32,
-            wParam: usize,
-            lParam: isize,
-        ) -> isize;
+        pub fn SendMessageW(hWnd: HWND, Msg: u32, wParam: usize, lParam: isize) -> isize;
         #[cfg(target_pointer_width = "64")]
-        pub fn SetClassLongPtrW(
-            hWnd: HWND,
-            nIndex: i32,
-            dwNewLong: isize,
-        ) -> usize;
+        pub fn SetClassLongPtrW(hWnd: HWND, nIndex: i32, dwNewLong: isize) -> usize;
         #[cfg(target_pointer_width = "32")]
-        pub fn SetClassLongW(
-            hWnd: HWND,
-            nIndex: i32,
-            dwNewLong: i32,
-        ) -> u32;
+        pub fn SetClassLongW(hWnd: HWND, nIndex: i32, dwNewLong: i32) -> u32;
         pub fn CreateIcon(
             hInstance: HINSTANCE,
             nWidth: i32,
@@ -94,7 +82,6 @@ mod win32_icon {
             let cx_sm = GetSystemMetrics(SM_CXSMICON);
             let cy_sm = GetSystemMetrics(SM_CYSMICON);
 
-            // Intentar cargar desde el recurso 32512 del ejecutable (generado por tauri-build a partir de icon.ico)
             let mut hicon_big: HICON = LoadImageW(
                 hinst,
                 32512 as usize as *const u16,
@@ -112,7 +99,6 @@ mod win32_icon {
                 LR_SHARED,
             );
 
-            // Fallback si no está en recursos PE: generar icono desde PNG en memoria
             if hicon_big.is_null() {
                 if let Ok(img) = image::load_from_memory(icon_bytes) {
                     let rgba = img.to_rgba8();
@@ -171,14 +157,22 @@ mod win32_icon {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    logger::log_info(
+        "app",
+        concat!(
+            "Iniciando Multimedia Converter v",
+            env!("CARGO_PKG_VERSION")
+        ),
+    );
+
     #[cfg(windows)]
     win32_icon::set_process_aumid("com.raul.multimedia-converter");
 
     tauri::Builder::default()
         .setup(|app| {
-            let win = app.get_webview_window("main").or_else(|| {
-                app.webview_windows().into_values().next()
-            });
+            let win = app
+                .get_webview_window("main")
+                .or_else(|| app.webview_windows().into_values().next());
             if let Some(w) = win {
                 let icon_bytes = include_bytes!("../icons/128x128.png");
                 if let Ok(img) = image::load_from_memory(icon_bytes) {
@@ -211,9 +205,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
-        // Caché de la detección de GPU: se calcula una sola vez por sesión
         .manage(commands::HwCache::default())
-        // Conversiones en curso (para poder cancelarlas)
         .manage(commands::JobRegistry::default())
         .invoke_handler(tauri::generate_handler![
             commands::detect_hw_accel,
@@ -230,7 +222,11 @@ pub fn run() {
             docs::get_doc_metadata,
             docs::convert_docs_batch,
             docs::strip_docs_metadata,
-            docs::merge_pdfs
+            docs::merge_pdfs,
+            docs::split_pdf,
+            docs::images_to_pdf,
+            docs::compress_pdfs_batch,
+            logger::open_logs_dir
         ])
         .run(tauri::generate_context!())
         .expect("error al ejecutar la aplicación Tauri");

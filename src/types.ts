@@ -3,7 +3,9 @@ export type VideoCodec = "h264" | "hevc" | "av1" | "vp9";
 export type VideoFormat = "mp4" | "mkv" | "mov" | "webm" | "avi";
 export type ImgFormat = "png" | "jpg" | "webp";
 export type ImgScale = "100" | "75" | "50" | "25";
-export type DocFormat = "pdf" | "docx" | "txt" | "md";
+export type DocFormat = "pdf" | "docx" | "xlsx" | "txt" | "md";
+export type SplitMode = "extract" | "burst";
+export type PdfCompressLevel = "low" | "medium" | "high";
 export type JobStatus = "idle" | "running" | "done" | "error";
 
 /** Espejo de `HwProfile` en commands.rs (VP9 siempre va por CPU) */
@@ -46,10 +48,10 @@ export interface AudioStreamInfo {
 export interface VideoMetadata {
   durationSecs: number | null;
   sizeBytes: number | null;
-  bitRate: number | null; // bitrate total del archivo
+  bitRate: number | null;
   video: VideoStreamInfo | null;
   audio: AudioStreamInfo | null;
-  thumbnail: string | null; // ruta al JPG temporal extraído por FFmpeg
+  thumbnail: string | null;
 }
 
 /** Respuesta de `get_image_metadata` */
@@ -120,6 +122,15 @@ export interface DocResult {
   ok: boolean;
   error: string | null;
   sizeBytes: number | null;
+}
+
+export interface SplitPdfResult {
+  source: string;
+  outputs: string[];
+  ok: boolean;
+  error: string | null;
+  totalSizeBytes: number | null;
+  pagesExtracted: number;
 }
 
 export interface DocProgress {
